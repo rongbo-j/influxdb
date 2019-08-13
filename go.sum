@@ -204,6 +204,8 @@ github.com/influxdata/changelog v1.0.0 h1:RstJD6H48zLQj0GdE6E6k/6RPwtUjkyzIe/T1E
 github.com/influxdata/changelog v1.0.0/go.mod h1:uzpGWE/qehT8L426YuXwpMQub+a63vIINhIeEI9mnSM=
 github.com/influxdata/cron v0.0.0-20190729230110-3b948b8befa8 h1:MlgsawEkWnnndKkyGACh+l5JTf28P07EsEOdVz8LlCU=
 github.com/influxdata/cron v0.0.0-20190729230110-3b948b8befa8/go.mod h1:XabtPPW2qsCg0tl+kjaPU+cFS+CjQXEXbT1VJvHT4og=
+github.com/influxdata/cron v0.0.0-20190812233253-38faece03642 h1:ae+mZOcsOpcD0GyaVpqAzR/2t2tffQ2cWArPGohs3A8=
+github.com/influxdata/cron v0.0.0-20190812233253-38faece03642/go.mod h1:XabtPPW2qsCg0tl+kjaPU+cFS+CjQXEXbT1VJvHT4og=
 github.com/influxdata/flux v0.38.0 h1:3Ck4fB8M2It7hyWIKPNwbO2iTmF2hbFWTf3LM2ITHEI=
 github.com/influxdata/flux v0.38.0/go.mod h1:/GF9ByzsYF/hr6N6QNAWceC78aQHMZYFZMpyv3yPMj0=
 github.com/influxdata/goreleaser v0.97.0-influx h1:jT5OrcW7WfS0e2QxfwmTBjhLvpIC9CDLRhNgZJyhj8s=

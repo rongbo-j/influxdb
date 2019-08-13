@@ -10,6 +10,7 @@ type Time interface {
 	Now() time.Time
 	Unix(seconds, nanoseconds int64) time.Time
 	NewTimer(d time.Duration) Timer
+	Until(time.Time) time.Duration
 }
 
 type stdTime struct{}
@@ -23,6 +24,11 @@ func (stdTime) Now() time.Time {
 func (stdTime) Unix(sec, nsec int64) time.Time {
 	return time.Unix(sec, nsec)
 }
+
+func (stdTime) Until(t time.Time) time.Duration {
+	return time.Until(t)
+}
+
 
 // NewTimer gives us a Timer that fires after duration d.
 func (stdTime) NewTimer(d time.Duration) Timer {
@@ -78,6 +84,12 @@ func (t MockTime) Now() time.Time {
 // Unix creates a time.Time given seconds and nanoseconds.  It just wraps time.Unix.
 func (_ MockTime) Unix(sec, nsec int64) time.Time {
 	return time.Unix(sec, nsec)
+}
+
+
+// Util is equivalent to  t.T.Sub(ts).  We need it to mock out time, because the non-mocked implementation needs to be monotonic.
+func(t MockTime) Until(ts time.Time) time.Duration{
+	return t.T.Sub(ts)
 }
 
 // NewTimer returns a timer that will fire after d time.Duration from the underlying time in the MockTime.  It doesn't

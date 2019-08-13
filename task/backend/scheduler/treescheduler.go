@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"github.com/influxdata/influxdb/task/backend"
 	"sync"
 	"time"
 
@@ -35,7 +36,7 @@ type TreeScheduler struct {
 	executor  func(ctx context.Context, id ID, scheduledAt time.Time) (Promise, error)
 	onErr     func(ctx context.Context, taskID ID, runID ID, scheduledAt time.Time, err error) bool
 	time      Time
-	timer     *time.Timer
+	timer     Timer
 	done      chan struct{}
 	sema      chan struct{}
 	wg        sync.WaitGroup
@@ -93,8 +94,8 @@ func WithMaxRunsOutsanding(n int) treeSchedulerOptFunc {
 }
 
 func WithTime(t Time) treeSchedulerOptFunc {
-	return func(t *TreeScheduler) error {
-		t.time = stdTime{}
+	return func(sch *TreeScheduler) error {
+		sch.time = t
 		return nil
 	}
 }
@@ -106,20 +107,21 @@ func NewScheduler(Executor ExecutorFunc, opts ...treeSchedulerOptFunc) (*TreeSch
 		executor: Executor,
 		onErr:    func(_ context.Context, _ ID, _ ID, _ time.Time, _ error) bool { return true },
 		sema:     make(chan struct{}, defaultMaxRunsOutstanding),
+		time: stdTime{},
 	}
 
 	// apply options
 	for i := range opts {
 		if err := opts[i](s); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
 	s.sm = NewSchedulerMetrics(s)
-	s.when = time.Now().Add(maxWaitTime)
-	s.timer = time.NewTimer(time.Until(s.when)) //time.Until(s.when))
+	s.when = s.time.Now().Add(maxWaitTime)
+	s.timer = s.time.NewTimer(s.time.Until(s.when)) //time.Until(s.when))
 	if Executor == nil {
-		return nil, errors.New("Executor must be a non-nil function")
+		return nil, nil, errors.New("Executor must be a non-nil function")
 	}
 	go func() {
 		for {
@@ -130,71 +132,67 @@ func NewScheduler(Executor ExecutorFunc, opts ...treeSchedulerOptFunc) (*TreeSch
 				s.Unlock()
 				close(s.sema)
 				return
-			case <-s.timer.C:
+			case <-s.timer.C():
 				iti := s.scheduled.DeleteMin()
 				if iti == nil {
 					s.Lock()
+					if !s.timer.Stop(){
+						<-s.timer.C()
+					}
 					s.timer.Reset(maxWaitTime)
 					s.Unlock()
 					continue
 				}
-				if iti == nil {
-					s.Lock()
-					s.timer.Reset(maxWaitTime)
-					s.Unlock()
-					continue
-				}
+
 				it := iti.(item)
 				s.sm.startExecution(it.id, time.Since(time.Unix(it.next, 0)))
-				if prom, err := s.executor(context.Background(), it.id, time.Unix(it.next, 0)); err == nil {
-					t, err := it.cron.Next(s.time.Unix(it.next, 0))
-					it.next = t.Unix()
-					// we need to return the item to the scheduled before calling s.onErr
-					if err != nil {
-						it.nonce++
-						s.onErr(context.TODO(), it.id, prom.ID(), time.Unix(it.next, 0), err)
-					}
-					s.scheduled.ReplaceOrInsert(it)
-					if prom == nil {
-						break
-					}
-					s.Lock()
-					s.running.ReplaceOrInsert(runningItem{cancel: prom.Cancel, runID: prom.ID(), taskID: ID(it.id)})
-					s.Unlock()
-
-					s.wg.Add(1)
-
-					s.sema <- struct{}{}
-					go func(it item) {
-						defer func() {
-							s.wg.Done()
-							<-s.sema
-						}()
-						<-prom.Done()
-						err := prom.Error()
-						if err != nil {
-							s.onErr(context.TODO(), it.id, prom.ID(), time.Unix(it.next, 0), err)
-							return
-						}
-						s.Lock()
-						s.running.Delete(runningItem{cancel: prom.Cancel, runID: ID(prom.ID()), taskID: ID(it.id)})
-						s.Unlock()
-
-						s.sm.finishExecution(it.id, res.Err() == nil, time.Since(time.Unix(it.next, 0)))
-
-						if err = res.Err(); err != nil {
-							s.onErr(context.TODO(), it.id, time.Unix(it.next, 0), err)
-							return
-						}
-						// TODO(docmerlin); handle statistics on the run
-					}(it)
-				} else if err != nil {
+				prom, err := s.executor(context.Background(), it.id, time.Unix(it.next, 0))
+				if err != nil {
 					s.onErr(context.Background(), it.id, 0, time.Unix(it.next, 0), err)
 				}
+				t, err := it.cron.Next(s.time.Unix(it.next, 0))
+				it.next = t.Unix()
+				// we need to return the item to the scheduled before calling s.onErr
+				if err != nil {
+					it.nonce++
+					s.onErr(context.TODO(), it.id, prom.ID(), time.Unix(it.next, 0), err)
+				}
+				s.scheduled.ReplaceOrInsert(it)
+				if prom == nil {
+					break
+				}
+				s.Lock()
+				s.running.ReplaceOrInsert(runningItem{cancel: prom.Cancel, runID: prom.ID(), taskID: ID(it.id)})
+				s.Unlock()
+
+				s.wg.Add(1)
+				s.sema <- struct{}{}
+				go func(it item, prom Promise) {
+					defer func() {
+						s.wg.Done()
+						<-s.sema
+					}()
+					<-prom.Done()
+					err := prom.Error()
+					if err != nil {
+						s.onErr(context.Background(), it.id, prom.ID(), time.Unix(it.next, 0), err)
+						return
+					}
+					s.Lock()
+					s.running.Delete(runningItem{cancel: prom.Cancel, runID: ID(prom.ID()), taskID: ID(it.id)})
+					s.Unlock()
+
+					s.sm.finishExecution(it.id, prom.Error() == nil, backend.RunStarted, time.Since(time.Unix(it.next, 0)))
+
+					if err = prom.Error(); err != nil {
+						s.onErr (context.Background(), it.id, 0, time.Unix(it.next, 0), err)
+						return
+					}
+				}(it, prom)
 			}
 		}
 	}()
-	return s, nil
+	return s, s.sm, nil
 }
 
 func (s *TreeScheduler) Stop() {
@@ -242,7 +240,7 @@ func (s *TreeScheduler) Release(taskID ID) error {
 
 // put puts an Item on the TreeScheduler.
 func (s *TreeScheduler) Schedule(id ID, cronString string, offset time.Duration, since time.Time) error {
-	s.sm.schedule(taskID)
+	s.sm.schedule(id)
 	crSch, err := cron.ParseUTC(cronString)
 	if err != nil {
 		return err
